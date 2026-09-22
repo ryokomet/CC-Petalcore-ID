@@ -1,1 +1,2 @@
-# CC-Petalcore-ID
+# cloudcomputing
+eto na talaga
