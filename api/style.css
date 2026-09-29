@@ -162,4 +162,47 @@ button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
 .score-fill { background: var(--color-forest); height: 100%; }
 @media (max-width: 900px) { .results { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 600px) { .upload-area, .results { grid-template-columns: 1fr; } }
+/* Subtle motion shared with Petalcore Index. */
+@keyframes cardIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+@keyframes textPulse {
+    0%, 100% { opacity: .45; }
+    50% { opacity: 1; }
+}
+@keyframes scoreIn {
+    from { transform: scaleX(0); }
+    to { transform: scaleX(1); }
+}
+.match-card {
+    --entry-delay: 0ms;
+    animation: cardIn .4s ease backwards;
+    animation-delay: var(--entry-delay);
+    transition: box-shadow .2s ease, transform .2s ease, border-color .2s ease;
+}
+.match-card:nth-child(2) { --entry-delay: 60ms; }
+.match-card:nth-child(3) { --entry-delay: 120ms; }
+.match-card:nth-child(4) { --entry-delay: 180ms; }
+.match-card:nth-child(5) { --entry-delay: 240ms; }
+@media (hover: hover) {
+    .match-card:hover {
+        box-shadow: 0 8px 20px rgba(31, 46, 28, .12);
+        transform: translateY(-4px);
+        border-color: var(--color-accent);
+    }
+}
+#preview:not([hidden]), .error-message:not([hidden]) { animation: fadeIn .25s ease; }
+.loading-text { animation: textPulse 1.3s ease-in-out infinite; }
+.score-fill {
+    transform-origin: left;
+    animation: scoreIn .5s ease backwards;
+    animation-delay: var(--entry-delay, 0ms);
+}
+.drop-zone { transition: border-color .2s ease, background-color .2s ease; }
+select { transition: border-color .2s ease, box-shadow .2s ease; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
