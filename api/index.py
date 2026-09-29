@@ -33,9 +33,9 @@ Organ = Literal["auto", "leaf", "flower", "fruit", "bark"]
 app = FastAPI(title=APP_TITLE, description="Identify a plant from a photograph with Pl@ntNet.", version=API_VERSION)
 api_router = APIRouter(prefix=API_PREFIX, tags=["Identification"])
 allowed_origins = [value.strip() for value in os.getenv("ALLOWED_ORIGINS", "").split(",") if value.strip()]
-if allowed_origins:
-    app.add_middleware(CORSMiddleware, allow_origins=allowed_origins,
-                       allow_methods=["GET", "POST"], allow_headers=["x-api-key", "Content-Type"])
+# Local browser previews may use any Live Server port. Disabled on Vercel.
+allow_local_dev = os.getenv("ALLOW_LOCAL_DEV", "false" if os.getenv("VERCEL") else "true").lower() == "true"
+local_origin_regex = r"http://(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]+)?" if allow_local_dev else None
 
 
 # Bound the body before multipart parsing, including requests without Content-Length.
@@ -66,6 +66,10 @@ class UploadLimitMiddleware:
 
 
 app.add_middleware(UploadLimitMiddleware)
+# Wrap upload limits as well, so cross-origin clients can read error responses.
+app.add_middleware(CORSMiddleware, allow_origins=allowed_origins,
+                   allow_origin_regex=local_origin_regex,
+                   allow_methods=["GET", "POST"], allow_headers=["x-api-key", "Content-Type"])
 
 
 # DATA MODELS
@@ -158,6 +162,11 @@ def javascript():
 @app.get("/style.css", include_in_schema=False)
 def stylesheet():
     return FileResponse(BASE_DIR / "style.css", media_type="text/css")
+
+
+@app.get("/images/hero-bg.jpg", include_in_schema=False)
+def hero_background():
+    return FileResponse(BASE_DIR / "images" / "hero-bg.jpg", media_type="image/jpeg")
 
 
 @app.get("/config", include_in_schema=False)

@@ -39,6 +39,20 @@ class IdentificationTests(unittest.TestCase):
         for path in ["/.env", "/api/index.py", "/requirements.txt"]:
             self.assertEqual(self.client.get(path).status_code, 404)
 
+    def test_live_server_cors(self):
+        for origin in ["http://127.0.0.1:5500", "http://localhost:5501"]:
+            response = self.client.get("/config", headers={"Origin": origin})
+            self.assertEqual(response.headers.get("access-control-allow-origin"), origin)
+            preflight = self.client.options("/api/v1/identify", headers={
+                "Origin": origin, "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "x-api-key"})
+            self.assertEqual(preflight.status_code, 200)
+            self.assertEqual(preflight.headers.get("access-control-allow-origin"), origin)
+        response = self.client.get("/config", headers={"Origin": "https://untrusted.example"})
+        self.assertNotIn("access-control-allow-origin", response.headers)
+        response = self.client.get("/config", headers={"Origin": "http://localhost.evil.example:5500"})
+        self.assertNotIn("access-control-allow-origin", response.headers)
+
     def test_config_does_not_expose_provider_key(self):
         with patch.object(index, "PLANTNET_API_KEY", "private-provider-secret"):
             self.assertNotIn("private-provider-secret", self.client.get("/config").text)

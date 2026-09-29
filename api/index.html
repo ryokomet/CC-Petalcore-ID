@@ -1,90 +1,79 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Meet the plants around you. Upload a photo and discover possible plant matches with Petalcore ID, powered by Pl@ntNet.">
-    <title>Petalcore ID | Meet your plant</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Petalcore ID</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@400;500;600&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/style.css">
-    <script src="/app.js" defer></script>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Work+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
-    <a class="skip-link" href="#main">Skip to identification</a>
-    <header class="site-header">
-        <div class="header-inner">
-            <a class="brand" href="/" aria-label="Petalcore ID home">
-                <svg viewBox="0 0 48 48" width="38" height="38" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M24 42V14M24 14c0-7 5-11 12-11-1 7-5 12-12 12M24 22c0-6-5-9-11-9 1 6 5 10 11 10M24 30c0-5-4-8-9-8 1 5 4 8 9 8"/></svg>
-                <span>petalcore <span class="brand-id">ID</span></span>
-            </a>
-            <a class="header-link" href="#photo-tips">A better plant photo <span aria-hidden="true">↗</span></a>
-        </div>
-        <div class="hero">
-            <div>
-                <p class="eyebrow">A little curiosity. A new discovery.</p>
-                <h1>Every plant has a name.<br><em>Let’s find this one.</em></h1>
-                <p class="hero-description">A leaf on your walk. A flower in your garden.<br>Start with a photo and get to know what’s growing.</p>
+    <header>
+        <div class="brand">
+            <svg class="brand-icon" viewBox="0 0 48 48" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M24 42V14"/>
+                <path d="M24 14c0-7 5-11 12-11-1 7-5 12-12 12"/>
+                <path d="M24 22c0-6-5-9-11-9 1 6 5 10 11 10"/>
+                <path d="M24 30c0-5-4-8-9-8 1 5 4 8 9 8"/>
+            </svg>
+            <div class="brand-text">
+                <h1>Petalcore ID</h1>
+                <p>Upload a plant photo to find possible matches. Powered by Pl@ntNet</p>
             </div>
-            <div class="hero-note"><span class="note-number">01</span><p>Your pocket<br><i>field companion.</i></p><span class="note-line"></span><span>POWERED BY PL@NTNET</span></div>
         </div>
     </header>
 
-    <main id="main">
-        <div class="section-heading"><div><p class="eyebrow">From photo to possibility</p><h2>What caught your eye?</h2></div><span class="step-label">ONE PLANT AT A TIME</span></div>
-        <div class="workspace">
-            <section class="upload-panel panel" aria-labelledby="upload-title">
-                <div class="panel-heading"><span class="step-number">01</span><h3 id="upload-title">Add your plant photo</h3></div>
-                <form id="identifyForm">
-                    <div id="dropZone" class="drop-zone">
-                        <div id="uploadPrompt">
-                            <svg class="upload-icon" width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7" y="10" width="34" height="29" rx="3"/><circle cx="17" cy="20" r="3"/><path d="m9 35 10-9 7 6 6-9 8 12M33 5v10m-5-5h10"/></svg>
-                            <p class="drop-title">A small photo.<br>A whole new discovery.</p>
-                            <p class="muted">Drop your photo here, or choose one below.</p>
-                        </div>
-                        <img id="preview" alt="Your selected plant photo" hidden>
-                        <div id="photoMeta" class="photo-meta" hidden></div>
-                    </div>
+    <main>
+        <section aria-labelledby="upload-title">
+            <h2 id="upload-title">Identify a plant</h2>
+            <form id="identifyForm" class="upload-area">
+                <div id="dropZone" class="drop-zone">
+                    <p id="uploadPrompt">Drop a plant photo here or choose one below.</p>
+                    <img id="preview" alt="Your selected plant photo" hidden>
+                    <p id="photoMeta" class="photo-meta" hidden></p>
+                </div>
+                <div class="upload-controls">
                     <div class="photo-actions">
-                        <button type="button" id="chooseButton" class="secondary">Choose photo</button>
+                        <button type="button" id="chooseButton">Choose photo</button>
                         <button type="button" id="cameraButton" class="secondary">Take a photo</button>
-                        <button type="button" id="removeButton" class="text-button" hidden>Remove</button>
+                        <button type="button" id="removeButton" class="secondary" hidden>Remove</button>
                     </div>
                     <input id="photoInput" type="file" accept="image/jpeg,image/png" hidden>
                     <input id="cameraInput" type="file" accept="image/jpeg,image/png" capture="environment" hidden>
-                    <p class="file-help">JPG or PNG, up to 20 MB. Large photos are resized before upload.</p>
-                    <label for="organ">What’s in the photo?</label>
-                    <select id="organ" name="organ"><option value="auto">Not sure? Detect automatically</option><option value="leaf">Leaf</option><option value="flower">Flower</option><option value="fruit">Fruit</option><option value="bark">Bark</option></select>
-                    <button id="identifyButton" class="primary" type="submit" disabled><span id="buttonLabel">Identify this plant</span><span aria-hidden="true">↗</span></button>
-                    <p class="privacy-note">Your photo is sent to Pl@ntNet for identification when you submit. Petalcore does not save your uploads.</p>
-                </form>
-                <p id="statusMessage" class="status-message" role="status" aria-live="polite"></p>
-                <p id="errorMessage" class="error-message" role="alert" hidden></p>
-            </section>
-
-            <section class="results-panel panel" aria-labelledby="results-title" aria-busy="false">
-                <div class="panel-heading"><span class="step-number">02</span><h3 id="results-title">Meet your possible matches</h3></div>
-                <div id="emptyState" class="empty-state">
-                    <svg width="105" height="120" viewBox="0 0 105 120" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M52 107V42M52 66C19 68 12 48 16 28c24 0 37 13 36 38ZM52 47C50 19 68 10 88 13c0 22-12 36-36 34ZM52 89C73 91 87 78 89 63c-21-4-36 7-37 26ZM52 64 26 40M54 44 77 23M54 87 79 70M29 109h48"/></svg>
-                    <h4>A name is just a photo away.</h4>
-                    <p>Add a clear photo of a plant.<br>Your closest matches will appear here.</p>
-                    <span class="empty-caption">OBSERVE · CAPTURE · DISCOVER</span>
+                    <p class="file-help">JPG or PNG, up to 20 MB. Large photos are resized automatically.</p>
+                    <label for="organ">Plant part</label>
+                    <select id="organ" name="organ">
+                        <option value="auto">Detect automatically</option>
+                        <option value="leaf">Leaf</option>
+                        <option value="flower">Flower</option>
+                        <option value="fruit">Fruit</option>
+                        <option value="bark">Bark</option>
+                    </select>
+                    <button id="identifyButton" type="submit" disabled><span id="buttonLabel">Identify this plant</span></button>
+                    <p class="privacy-note">Photos are sent to Pl@ntNet for identification. Petalcore does not save uploads.</p>
                 </div>
-                <div id="loadingState" class="empty-state" hidden><span class="spinner" aria-hidden="true"></span><h4>Looking a little closer…</h4><p>Comparing your photo with plant species.<br>This may take a few moments.</p></div>
-                <div id="noMatchState" class="empty-state" hidden><h4>Let’s try another angle.</h4><p>No plant match was found. Try a close-up of a leaf or flower in natural light.</p></div>
-                <div id="results" class="results" hidden></div>
-                <p id="resultNote" class="result-note" hidden>These are possible matches, not a confirmed identification. Compare the details, especially when scores are low. Do not use a photo result to decide whether a plant is edible.</p>
-            </section>
-        </div>
+            </form>
+            <p id="statusMessage" class="status-message" role="status" aria-live="polite"></p>
+            <p id="errorMessage" class="error-message" role="alert" hidden></p>
+        </section>
 
-        <section id="photo-tips" class="tips" aria-labelledby="tips-title">
-            <div class="tips-intro"><p class="eyebrow">A closer look helps</p><h2 id="tips-title">Good photos,<br>better discoveries.</h2></div>
-            <article><span class="tip-number">01 / LIGHT</span><h3>Keep it natural.</h3><p>Soft daylight brings out the details. Avoid harsh shadows and blurry shots.</p></article>
-            <article><span class="tip-number">02 / FOCUS</span><h3>Get a little closer.</h3><p>Fill the frame with a leaf or flower, keeping its edges and texture visible.</p></article>
-            <article><span class="tip-number">03 / SUBJECT</span><h3>One plant, one photo.</h3><p>Keep other plants out of the frame so the subject is easy to distinguish.</p></article>
+        <section class="results-panel" aria-labelledby="results-title" aria-busy="false">
+            <h2 id="results-title">Possible matches</h2>
+            <p id="emptyState" class="muted">Upload a photo to see possible plant matches.</p>
+            <p id="loadingState" class="loading-text" hidden>Identifying your plant...</p>
+            <p id="noMatchState" class="muted" hidden>No match found. Try a clearer photo of a leaf or flower.</p>
+            <div id="results" class="results" hidden></div>
+            <p id="resultNote" class="result-note" hidden>Results are suggestions, not a confirmed identification. Do not use a photo result to decide whether a plant is edible.</p>
         </section>
     </main>
-    <footer><span>petalcore <strong>ID</strong><span class="footer-divider">/</span>Stay curious. Keep growing.</span><span>Identification by <a href="https://plantnet.org/en/" target="_blank" rel="noopener noreferrer">Pl@ntNet ↗</a></span></footer>
+
+    <footer>
+        <p>Plant identification provided by <a href="https://plantnet.org/en/" target="_blank" rel="noopener noreferrer">Pl@ntNet</a></p>
+    </footer>
+    <script src="app.js"></script>
 </body>
 </html>

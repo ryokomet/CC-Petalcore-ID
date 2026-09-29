@@ -103,10 +103,34 @@ async function selectPhoto(file) {
 
 async function getConfig(signal) {
     if (apiConfig) return apiConfig;
-    const response = await fetch("/config", { signal, cache: "no-store" });
-    if (!response.ok) throw new Error("The site configuration could not be loaded. Please refresh and try again.");
-    apiConfig = await response.json();
-    return apiConfig;
+    const isLocal = ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
+    // Same-origin in production; local FastAPI fallback for VS Code Live Server.
+    const origins = [...new Set([window.location.origin,
+        ...(isLocal ? ["http://127.0.0.1:8012", "http://127.0.0.1:8000"] : [])])];
+    for (const origin of origins) {
+        if (signal.aborted) throw new DOMException("Request cancelled", "AbortError");
+        const attempt = new AbortController();
+        const cancel = () => attempt.abort();
+        signal.addEventListener("abort", cancel, { once: true });
+        const timer = setTimeout(cancel, 3000);
+        try {
+            const response = await fetch(`${origin}/config`, { signal: attempt.signal, cache: "no-store" });
+            if (!response.ok) continue;
+            const config = await response.json();
+            if (typeof config.api_url !== "string" || typeof config.api_key !== "string") continue;
+            // Relative API paths belong to the backend, not the Live Server origin.
+            apiConfig = { ...config, api_url: new URL(config.api_url, `${origin}/`).href };
+            return apiConfig;
+        } catch (error) {
+            if (signal.aborted) throw new DOMException("Request cancelled", "AbortError");
+        } finally {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", cancel);
+        }
+    }
+    throw new Error(isLocal
+        ? "Could not connect to FastAPI. Start the backend on port 8012 or 8000, then try again."
+        : "The site configuration could not be loaded. Please refresh and try again.");
 }
 
 function element(tag, className, text) {

@@ -2,5 +2,6 @@
 .env.*
 .venv/
 tests/
-api/images/
+api/images/*
+!api/images/hero-bg.jpg
 **/__pycache__/

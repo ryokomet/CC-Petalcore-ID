@@ -1,6 +1,6 @@
 # Petalcore ID
 
-Take or upload a plant photo and see up to five possible identifications from Pl@ntNet. The interface keeps Petalcore Index's cream, forest green, Fraunces, and Work Sans design. The copied plant library has been replaced by the identification workflow; the existing `images/` folder is unused and unchanged.
+Take or upload a plant photo and see up to five possible identifications from Pl@ntNet. The interface keeps Petalcore Index's cream, forest green, Fraunces, and Work Sans design. The copied plant library has been replaced by the identification workflow. The header uses the same `images/hero-bg.jpg` photo as Index; other plant images remain unused.
 
 ## Structure
 
@@ -10,7 +10,7 @@ api/
   index.html    Photo upload and results page
   app.js        Camera/file selection, resizing, authenticated requests, and result rendering
   style.css     Responsive Petalcore layout
-  images/       Existing reference assets, not used by identification
+  images/       Shared hero background and unused reference plant images
 tests/test_api.py
 .env.example
 requirements.txt
@@ -32,7 +32,7 @@ If `.env` does not exist, copy `.env.example` to `.env`. Set `PLANTNET_API_KEY` 
 .venv\Scripts\python -m uvicorn api.index:app --reload
 ```
 
-Open `http://127.0.0.1:8000/`. The same server serves the frontend, `/health`, and interactive `/docs`. Use this server rather than opening the HTML file directly or through Live Server.
+Open `http://127.0.0.1:8000/`. The same server serves the frontend, `/health`, and interactive `/docs`. You can also open `api/index.html` through VS Code Live Server while FastAPI is running. The frontend tries its own server first, then local FastAPI on port 8012 or 8000. Relative API URLs are resolved against the backend. Localhost CORS is enabled locally and disabled automatically on Vercel; set `ALLOW_LOCAL_DEV=false` to disable it elsewhere. Opening the HTML as a `file://` URL only supports layout previews.
 
 ## API
 
