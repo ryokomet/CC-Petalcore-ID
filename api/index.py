@@ -1,479 +1,209 @@
-from fastapi import APIRouter, FastAPI, HTTPException, Header, Query, Depends
-from fastapi.middleware.cors import CORSMiddleware
+import hmac
+import os
+import warnings
 from datetime import datetime, timezone
-from pydantic import BaseModel, ConfigDict, Field
-from typing import Literal, Optional
+from io import BytesIO
+from pathlib import Path
+from typing import Literal
+
+import httpx
+from dotenv import load_dotenv
+from fastapi import APIRouter, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from PIL import Image, ImageOps, UnidentifiedImageError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from starlette.concurrency import run_in_threadpool
 
 # CONFIGURATION
-API_KEY = "2024-2-00682-api-key-FDRD"
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR.parent / ".env")
+APP_TITLE = "Petalcore ID API"
 API_VERSION = "1.0"
 API_PREFIX = "/api/v1"
-APP_TITLE = "Simple Plant API"
-APP_DESCRIPTION = "A beginner-friendly REST API containing information about plants."
+# This browser client key identifies ID, not an individual user. It is public.
+API_KEY = os.getenv("PETALCORE_ID_API_KEY", "petalcore-id-public-client")
+PLANTNET_API_KEY = os.getenv("PLANTNET_API_KEY", "")
+PLANTNET_URL = "https://my-api.plantnet.org/v2/identify/all"
+MAX_IMAGE_BYTES = 4_000_000
+MAX_REQUEST_BYTES = 4_200_000
+MAX_PIXELS = 25_000_000
+Organ = Literal["auto", "leaf", "flower", "fruit", "bark"]
 
-app = FastAPI(
-    title=APP_TITLE,
-    description=APP_DESCRIPTION,
-    version=API_VERSION
-)
+app = FastAPI(title=APP_TITLE, description="Identify a plant from a photograph with Pl@ntNet.", version=API_VERSION)
+api_router = APIRouter(prefix=API_PREFIX, tags=["Identification"])
+allowed_origins = [value.strip() for value in os.getenv("ALLOWED_ORIGINS", "").split(",") if value.strip()]
+if allowed_origins:
+    app.add_middleware(CORSMiddleware, allow_origins=allowed_origins,
+                       allow_methods=["GET", "POST"], allow_headers=["x-api-key", "Content-Type"])
 
-api_router = APIRouter(prefix=API_PREFIX)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Bound the body before multipart parsing, including requests without Content-Length.
+class UploadLimitMiddleware:
+    def __init__(self, app):
+        self.app = app
 
-# DATA MODEL
-class Plant(BaseModel):
-    model_config = ConfigDict(strict=True, str_strip_whitespace=True, extra="forbid")
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["method"] != "POST":
+            return await self.app(scope, receive, send)
+        messages, size = [], 0
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            size += len(message.get("body", b""))
+            if size > MAX_REQUEST_BYTES:
+                return await JSONResponse({"detail": "Photo is too large. Upload an image under 4 MB."}, status_code=413)(scope, receive, send)
+            messages.append(message)
+            if not message.get("more_body", False):
+                break
+        iterator = iter(messages)
 
-    id: int = Field(gt=0)
-    image_slug: str = Field(min_length=1, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-    common_name: str = Field(min_length=1)
+        async def replay():
+            return next(iterator, {"type": "http.request", "body": b"", "more_body": False})
+
+        await self.app(scope, replay, send)
+
+
+app.add_middleware(UploadLimitMiddleware)
+
+
+# DATA MODELS
+class PlantMatch(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
     scientific_name: str = Field(min_length=1)
-    family: str = Field(min_length=1)
-    genus: str = Field(min_length=1)
-    plant_type: str = Field(min_length=1)
-    origin: str = Field(min_length=1)
-    habitat: str = Field(min_length=1)
-    lifespan: str = Field(min_length=1)
-    height_m: float = Field(gt=0, allow_inf_nan=False)
-    spread_m: float = Field(gt=0, allow_inf_nan=False)
-    sunlight: Literal[
-        "Full Sun", "Partial Shade", "Full Sun to Partial Shade",
-        "Low Light to Full Sun", "Bright Indirect Light"
-    ]
-    water_requirement: Literal[
-        "Low", "Moderate", "High", "Low to Moderate", "Moderate to High"
-    ]
-    soil_type: str = Field(min_length=1)
-    flower_color: str = Field(min_length=1)
-    flowering_season: str = Field(min_length=1)
-    uses: str = Field(min_length=1)
-    toxicity: str = Field(min_length=1)
-    description: str = Field(min_length=1)
+    common_names: list[str]
+    family: str
+    genus: str
+    score: float = Field(ge=0, le=1, allow_inf_nan=False)
 
 
-# PLANT DATA
-plants = [
+class IdentificationResponse(BaseModel):
+    results: list[PlantMatch]
+    count: int = Field(ge=0)
+    organ: Organ
+    provider: str = "Pl@ntNet"
 
-    {
-        "id": 1,
-        "common_name": "Rose",
-        "image_slug": "rose",
-        "scientific_name": "Rosa",
-        "family": "Rosaceae",
-        "genus": "Rosa",
-        "plant_type": "Flowering Plant",
-        "origin": "Asia, Europe, North America, and Northwest Africa",
-        "habitat": "Gardens, temperate forests, grasslands",
-        "lifespan": "Perennial",
-        "height_m": 2.0,
-        "spread_m": 1.5,
-        "sunlight": "Full Sun",
-        "water_requirement": "Moderate",
-        "soil_type": "Well-drained loamy soil",
-        "flower_color": "Red, pink, white, yellow, orange",
-        "flowering_season": "Spring to Autumn",
-        "uses": "Ornamental, perfume, cosmetics",
-        "toxicity": "Non-toxic",
-        "description": "A widely cultivated flowering plant known for its fragrant and colorful flowers and thorny stems."
-    },
-    {
-        "id": 2,
-        "common_name": "Sunflower",
-        "image_slug": "sunflower",
-        "scientific_name": "Helianthus annuus",
-        "family": "Asteraceae",
-        "genus": "Helianthus",
-        "plant_type": "Annual Herb",
-        "origin": "North America",
-        "habitat": "Grasslands, fields, agricultural areas",
-        "lifespan": "Annual",
-        "height_m": 3.0,
-        "spread_m": 0.6,
-        "sunlight": "Full Sun",
-        "water_requirement": "Moderate",
-        "soil_type": "Well-drained fertile soil",
-        "flower_color": "Yellow",
-        "flowering_season": "Summer",
-        "uses": "Oil production, food, ornamental",
-        "toxicity": "Non-toxic",
-        "description": "A tall annual plant recognized by its large yellow flower head and edible seeds."
-    },
-    {
-        "id": 3,
-        "common_name": "Lavender",
-        "image_slug": "lavender",
-        "scientific_name": "Lavandula angustifolia",
-        "family": "Lamiaceae",
-        "genus": "Lavandula",
-        "plant_type": "Herbaceous Perennial",
-        "origin": "Mediterranean region",
-        "habitat": "Dry hillsides, rocky slopes, gardens",
-        "lifespan": "Perennial",
-        "height_m": 0.8,
-        "spread_m": 0.8,
-        "sunlight": "Full Sun",
-        "water_requirement": "Low",
-        "soil_type": "Dry, well-drained alkaline soil",
-        "flower_color": "Purple",
-        "flowering_season": "Summer",
-        "uses": "Essential oils, perfume, ornamental",
-        "toxicity": "Generally non-toxic",
-        "description": "An aromatic Mediterranean herb valued for its purple flowers and distinctive fragrance."
-    },
-    {
-        "id": 4,
-        "common_name": "Aloe Vera",
-        "image_slug": "aloe-vera",
-        "scientific_name": "Aloe vera",
-        "family": "Asphodelaceae",
-        "genus": "Aloe",
-        "plant_type": "Succulent",
-        "origin": "Arabian Peninsula",
-        "habitat": "Arid and semi-arid regions",
-        "lifespan": "Perennial",
-        "height_m": 0.8,
-        "spread_m": 0.6,
-        "sunlight": "Full Sun to Partial Shade",
-        "water_requirement": "Low",
-        "soil_type": "Sandy, well-drained soil",
-        "flower_color": "Yellow",
-        "flowering_season": "Winter to Spring",
-        "uses": "Cosmetics, skincare, ornamental",
-        "toxicity": "Toxic if ingested in large quantities",
-        "description": "A drought-tolerant succulent with thick fleshy leaves commonly grown for ornamental and cosmetic purposes."
-    },
-    {
-        "id": 5,
-        "common_name": "Mango",
-        "image_slug": "mango",
-        "scientific_name": "Mangifera indica",
-        "family": "Anacardiaceae",
-        "genus": "Mangifera",
-        "plant_type": "Fruit Tree",
-        "origin": "South Asia",
-        "habitat": "Tropical forests and cultivated areas",
-        "lifespan": "Perennial",
-        "height_m": 30.0,
-        "spread_m": 12.0,
-        "sunlight": "Full Sun",
-        "water_requirement": "Moderate",
-        "soil_type": "Deep, well-drained loamy soil",
-        "flower_color": "White to Pink",
-        "flowering_season": "Winter to Spring",
-        "uses": "Fruit production, food, shade",
-        "toxicity": "Fruit is edible; sap may cause skin irritation",
-        "description": "A large tropical evergreen tree cultivated worldwide for its sweet and nutritious fruit."
-    },
-    {
-        "id": 6,
-        "common_name": "Basil",
-        "image_slug": "basil",
-        "scientific_name": "Ocimum basilicum",
-        "family": "Lamiaceae",
-        "genus": "Ocimum",
-        "plant_type": "Herb",
-        "origin": "Tropical Asia and Africa",
-        "habitat": "Gardens, farms, warm temperate regions",
-        "lifespan": "Annual or Short-lived Perennial",
-        "height_m": 0.6,
-        "spread_m": 0.4,
-        "sunlight": "Full Sun",
-        "water_requirement": "Moderate",
-        "soil_type": "Rich, well-drained soil",
-        "flower_color": "White or Purple",
-        "flowering_season": "Summer",
-        "uses": "Culinary herb, essential oils",
-        "toxicity": "Generally non-toxic",
-        "description": "An aromatic herb widely used in cooking and particularly associated with Mediterranean and Southeast Asian cuisines."
-    },
-    {
-        "id": 7,
-        "common_name": "Snake Plant",
-        "image_slug": "snake-plant",
-        "scientific_name": "Dracaena trifasciata",
-        "family": "Asparagaceae",
-        "genus": "Dracaena",
-        "plant_type": "Succulent Herb",
-        "origin": "Tropical West Africa",
-        "habitat": "Dry tropical forests and rocky areas",
-        "lifespan": "Perennial",
-        "height_m": 1.2,
-        "spread_m": 0.5,
-        "sunlight": "Low Light to Full Sun",
-        "water_requirement": "Low",
-        "soil_type": "Sandy, well-drained soil",
-        "flower_color": "Greenish White",
-        "flowering_season": "Rarely Blooms",
-        "uses": "Ornamental, indoor plant",
-        "toxicity": "Toxic if ingested",
-        "description": "A hardy indoor plant recognized for its upright sword-shaped leaves and tolerance of low-light conditions."
-    },
-    {
-        "id": 8,
-        "common_name": "Peace Lily",
-        "image_slug": "peace-lily",
-        "scientific_name": "Spathiphyllum",
-        "family": "Araceae",
-        "genus": "Spathiphyllum",
-        "plant_type": "Herbaceous Perennial",
-        "origin": "Tropical Americas and Southeast Asia",
-        "habitat": "Tropical rainforests",
-        "lifespan": "Perennial",
-        "height_m": 0.8,
-        "spread_m": 0.6,
-        "sunlight": "Partial Shade",
-        "water_requirement": "Moderate to High",
-        "soil_type": "Moist, well-drained soil",
-        "flower_color": "White",
-        "flowering_season": "Spring to Summer",
-        "uses": "Indoor ornamental plant",
-        "toxicity": "Toxic if ingested",
-        "description": "A popular tropical houseplant known for its dark green leaves and distinctive white flower-like spathes."
-    },
-    {
-        "id": 9,
-        "common_name": "Bamboo",
-        "image_slug": "bamboo",
-        "scientific_name": "Bambusa vulgaris",
-        "family": "Poaceae",
-        "genus": "Bambusa",
-        "plant_type": "Grass",
-        "origin": "Asia",
-        "habitat": "Tropical and subtropical regions",
-        "lifespan": "Perennial",
-        "height_m": 15.0,
-        "spread_m": 5.0,
-        "sunlight": "Full Sun to Partial Shade",
-        "water_requirement": "High",
-        "soil_type": "Moist, well-drained fertile soil",
-        "flower_color": "Rarely Flowers",
-        "flowering_season": "Irregular",
-        "uses": "Construction, furniture, crafts, ornamental",
-        "toxicity": "Generally non-toxic",
-        "description": "A fast-growing perennial grass with hollow stems that is widely used for construction, crafts, and landscaping."
-    },
-    {
-        "id": 10,
-        "common_name": "Orchid",
-        "image_slug": "orchid",
-        "scientific_name": "Phalaenopsis amabilis",
-        "family": "Orchidaceae",
-        "genus": "Phalaenopsis",
-        "plant_type": "Epiphytic Orchid",
-        "origin": "Southeast Asia and Australia",
-        "habitat": "Tropical forests",
-        "lifespan": "Perennial",
-        "height_m": 0.7,
-        "spread_m": 0.5,
-        "sunlight": "Bright Indirect Light",
-        "water_requirement": "Moderate",
-        "soil_type": "Bark-based or porous orchid medium",
-        "flower_color": "White",
-        "flowering_season": "Year-round",
-        "uses": "Ornamental, floral arrangements",
-        "toxicity": "Non-toxic",
-        "description": "A tropical orchid prized for its elegant white flowers and popularity as an indoor ornamental plant."
-    },
-    {
-        "id": 11,
-        "common_name": "Coconut Palm",
-        "image_slug": "coconut-palm",
-        "scientific_name": "Cocos nucifera",
-        "family": "Arecaceae",
-        "genus": "Cocos",
-        "plant_type": "Palm Tree",
-        "origin": "Tropical Indo-Pacific",
-        "habitat": "Tropical coastal regions",
-        "lifespan": "Perennial",
-        "height_m": 30.0,
-        "spread_m": 7.0,
-        "sunlight": "Full Sun",
-        "water_requirement": "High",
-        "soil_type": "Sandy, well-drained soil",
-        "flower_color": "Cream to Yellow",
-        "flowering_season": "Year-round",
-        "uses": "Food, oil, fiber, construction",
-        "toxicity": "Non-toxic",
-        "description": "A tropical palm widely cultivated for its versatile fruit, edible meat, coconut water, oil, and fibrous husks."
-    },
-    {
-        "id": 12,
-        "common_name": "Venus Flytrap",
-        "image_slug": "venus-flytrap",
-        "scientific_name": "Dionaea muscipula",
-        "family": "Droseraceae",
-        "genus": "Dionaea",
-        "plant_type": "Carnivorous Plant",
-        "origin": "Southeastern United States",
-        "habitat": "Wetlands, bogs, savannas",
-        "lifespan": "Perennial",
-        "height_m": 0.2,
-        "spread_m": 0.2,
-        "sunlight": "Full Sun",
-        "water_requirement": "High",
-        "soil_type": "Acidic, nutrient-poor soil",
-        "flower_color": "White",
-        "flowering_season": "Spring",
-        "uses": "Ornamental, educational",
-        "toxicity": "Non-toxic",
-        "description": "A carnivorous plant that captures insects using specialized hinged leaves that rapidly close when triggered."
-    },
-    {
-        "id": 13,
-        "common_name": "Pitcher Plant",
-        "image_slug": "pitcher-plant",
-        "scientific_name": "Nepenthes alata",
-        "family": "Nepenthaceae",
-        "genus": "Nepenthes",
-        "plant_type": "Carnivorous Vine",
-        "origin": "Philippines",
-        "habitat": "Tropical forests and mountainous regions",
-        "lifespan": "Perennial",
-        "height_m": 1.5,
-        "spread_m": 1.0,
-        "sunlight": "Bright Indirect Light",
-        "water_requirement": "High",
-        "soil_type": "Acidic, nutrient-poor soil",
-        "flower_color": "Green to Red",
-        "flowering_season": "Seasonal",
-        "uses": "Ornamental, educational",
-        "toxicity": "Non-toxic",
-        "description": "A tropical carnivorous plant that develops pitcher-shaped traps filled with digestive fluid for capturing insects."
-    },
-    {
-        "id": 14,
-        "common_name": "Neem",
-        "image_slug": "neem",
-        "scientific_name": "Azadirachta indica",
-        "family": "Meliaceae",
-        "genus": "Azadirachta",
-        "plant_type": "Evergreen Tree",
-        "origin": "Indian Subcontinent",
-        "habitat": "Tropical and subtropical regions",
-        "lifespan": "Perennial",
-        "height_m": 20.0,
-        "spread_m": 15.0,
-        "sunlight": "Full Sun",
-        "water_requirement": "Low to Moderate",
-        "soil_type": "Well-drained sandy or loamy soil",
-        "flower_color": "White",
-        "flowering_season": "Spring",
-        "uses": "Traditional products, insect repellent, shade",
-        "toxicity": "Seeds and oil can be toxic if improperly consumed",
-        "description": "A hardy evergreen tree valued for its traditional uses and natural insect-repellent properties."
-    },
-    {
-        "id": 15,
-        "common_name": "Acacia",
-        "image_slug": "acacia",
-        "scientific_name": "Acacia mangium",
-        "family": "Fabaceae",
-        "genus": "Acacia",
-        "plant_type": "Evergreen Tree",
-        "origin": "Australia and Papua New Guinea",
-        "habitat": "Tropical forests and plantations",
-        "lifespan": "Perennial",
-        "height_m": 30.0,
-        "spread_m": 10.0,
-        "sunlight": "Full Sun",
-        "water_requirement": "Moderate",
-        "soil_type": "Well-drained acidic to neutral soil",
-        "flower_color": "Cream to Yellow",
-        "flowering_season": "Seasonal",
-        "uses": "Timber, reforestation, paper production",
-        "toxicity": "Some species contain toxic compounds",
-        "description": "A fast-growing tropical tree commonly cultivated for timber, pulp production, and reforestation."
-    }
-
-]
-
-# Validate every record at startup while preserving dictionary access in routes.
-plants = [Plant.model_validate(plant).model_dump() for plant in plants]
 
 # API KEY AUTHENTICATION
-def verify_api_key(x_api_key: Optional[str] = Header(default=None)):
-    if x_api_key != API_KEY:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing API key."
-        )
-    return True
+def verify_api_key(x_api_key: str | None = Header(default=None)):
+    if not API_KEY or not x_api_key or not hmac.compare_digest(x_api_key.encode(), API_KEY.encode()):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
 
 
-# HOME
-@app.get("/")
+# IMAGE VALIDATION
+def prepare_image(content: bytes) -> bytes:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(BytesIO(content)) as source:
+                if source.format not in {"JPEG", "PNG"}:
+                    raise HTTPException(415, "Please upload a JPG or PNG photo.")
+                if source.width * source.height > MAX_PIXELS:
+                    raise HTTPException(413, "Photo dimensions are too large. Please resize it first.")
+                source.verify()
+            with Image.open(BytesIO(content)) as source:
+                image = ImageOps.exif_transpose(source).convert("RGB")
+                image.thumbnail((2048, 2048))
+                output = BytesIO()
+                # Re-encoding removes EXIF/GPS metadata before sending to Pl@ntNet.
+                image.save(output, format="JPEG", quality=90)
+                return output.getvalue()
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
+        raise HTTPException(422, "This photo could not be read. Please choose another JPG or PNG.") from None
+
+
+async def request_identification(content: bytes, organ: Organ) -> dict:
+    if not PLANTNET_API_KEY:
+        raise HTTPException(503, "Plant identification is not configured yet. Please contact the site owner.")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(35.0, connect=10.0)) as client:
+            response = await client.post(
+                PLANTNET_URL,
+                params={"api-key": PLANTNET_API_KEY, "lang": "en", "nb-results": 5},
+                data={"organs": organ},
+                files={"images": ("plant.jpg", content, "image/jpeg")},
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(504, "Identification took too long. Please try again.") from None
+    except httpx.RequestError:
+        raise HTTPException(502, "The identification service could not be reached. Please try again.") from None
+    if response.status_code == 404:
+        return {"results": []}
+    if response.status_code == 429:
+        raise HTTPException(429, "The identification limit has been reached. Please try again later.")
+    if response.status_code in {401, 403}:
+        raise HTTPException(503, "The identification service key needs attention. Please contact the site owner.")
+    if response.status_code in {400, 413, 415, 422}:
+        raise HTTPException(422, "The identification service could not use this photo. Try a clearer JPG or PNG.")
+    if not response.is_success:
+        raise HTTPException(502, "The identification service is temporarily unavailable.")
+    try:
+        return response.json()
+    except ValueError:
+        raise HTTPException(502, "The identification service returned an unreadable response.") from None
+
+
+# PUBLIC ROUTES
+@app.get("/", include_in_schema=False)
 def home():
-
-    return {
-        "message": f"Welcome to the {APP_TITLE}!",
-        "version": API_VERSION,
-        "endpoints": [
-            "/health",
-            f"{API_PREFIX}/plants",
-            f"{API_PREFIX}/plants/{{plant_id}}",
-            f"{API_PREFIX}/plants/search"
-        ]
-    }
+    return FileResponse(BASE_DIR / "index.html")
 
 
-# HEALTH CHECK (Public)
+@app.get("/app.js", include_in_schema=False)
+def javascript():
+    return FileResponse(BASE_DIR / "app.js", media_type="text/javascript")
+
+
+@app.get("/style.css", include_in_schema=False)
+def stylesheet():
+    return FileResponse(BASE_DIR / "style.css", media_type="text/css")
+
+
+@app.get("/config", include_in_schema=False)
+def public_config():
+    # Never include the provider credential here. The ID client key is intentionally public.
+    return JSONResponse({"api_url": os.getenv("PUBLIC_API_BASE_URL", API_PREFIX), "api_key": API_KEY},
+                        headers={"Cache-Control": "no-store"})
+
+
 @app.get("/health")
 def health_check():
-    return {
-        "status": "ok",
-        "service": APP_TITLE,
-        "version": API_VERSION,
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    }
+    return {"status": "ok", "service": APP_TITLE, "version": API_VERSION,
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "identification_configured": bool(PLANTNET_API_KEY)}
 
 
-# GET ALL PLANTS (Protected)
-@api_router.get("/plants", dependencies=[Depends(verify_api_key)])
-def get_plants():
-
-    return {
-        "count": len(plants),
-        "plants": plants
-    }
-
-# SEARCH PLANTS (Protected)
-@api_router.get("/plants/search", dependencies=[Depends(verify_api_key)])
-def search_plants(q: str = Query(..., min_length=1)):
-    q = q.lower()
-    results = []
-    for plant in plants:
-        # Include all 20 fields, separating values to avoid joining words together.
-        searchable_text = " ".join(str(value) for value in plant.values()).lower()
-
-        if q in searchable_text:
-            results.append(plant)
-
-    return {
-        "query": q,
-        "count": len(results),
-        "results": results
-    }
-
-# GET ONE PLANT (Protected)
-@api_router.get("/plants/{plant_id}", dependencies=[Depends(verify_api_key)])
-def get_plant(plant_id: int):
-
-    for plant in plants:
-
-        if plant["id"] == plant_id:
-            return plant
-
-    raise HTTPException(
-        status_code=404,
-        detail="plant not found."
-    )
+# IDENTIFY A PLANT (Protected)
+@api_router.post("/identify", response_model=IdentificationResponse, dependencies=[Depends(verify_api_key)])
+async def identify_plant(image: UploadFile = File(...), organ: Organ = Form("auto")):
+    try:
+        if image.content_type not in {"image/jpeg", "image/png"}:
+            raise HTTPException(415, "Please upload a JPG or PNG photo.")
+        content = await image.read(MAX_IMAGE_BYTES + 1)
+        if len(content) > MAX_IMAGE_BYTES:
+            raise HTTPException(413, "Photo is too large. Upload an image under 4 MB.")
+        if not content:
+            raise HTTPException(422, "The uploaded photo is empty.")
+        prepared = await run_in_threadpool(prepare_image, content)
+        payload = await request_identification(prepared, organ)
+        try:
+            matches = []
+            for item in payload["results"][:5]:
+                species = item["species"]
+                matches.append(PlantMatch(
+                    scientific_name=species["scientificNameWithoutAuthor"],
+                    common_names=species.get("commonNames", []),
+                    family=species.get("family", {}).get("scientificNameWithoutAuthor", ""),
+                    genus=species.get("genus", {}).get("scientificNameWithoutAuthor", ""),
+                    score=item["score"],
+                ))
+            matches.sort(key=lambda item: item.score, reverse=True)
+        except (KeyError, TypeError, AttributeError, ValidationError):
+            raise HTTPException(502, "The identification service returned incomplete results. Please try again.") from None
+        return IdentificationResponse(results=matches, count=len(matches), organ=organ)
+    finally:
+        await image.close()
 
 
 app.include_router(api_router)

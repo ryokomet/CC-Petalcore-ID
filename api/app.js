@@ -1,293 +1,198 @@
-const API_URL = "https://ryokomet-cloudcomputing.vercel.app/api/v1";
-const API_KEY = "2024-2-00682-api-key-FDRD";
-const HEADERS = { "x-api-key": API_KEY };
-const FETCH_OPTIONS = { headers: HEADERS };
+const MAX_SOURCE_BYTES = 20_000_000;
+const MAX_UPLOAD_BYTES = 4_000_000;
+const MAX_SOURCE_PIXELS = 25_000_000;
+const $ = (id) => document.getElementById(id);
+let selectedPhoto = null;
+let previewUrl = null;
+let busy = false;
+let selectionVersion = 0;
+let apiConfig = null;
 
-// API REQUEST HELPER
-async function fetchAPI(endpoint) {
-    const response = await fetch(`${API_URL}${endpoint}`, FETCH_OPTIONS);
-
-    if (!response.ok) {
-        throw new Error(`API Error: ${response.status}`);
-    }
-
-    return await response.json();
+function showError(message = "") {
+    $("errorMessage").textContent = message;
+    $("errorMessage").hidden = !message;
 }
 
-// GET ALL PLANTS
-async function loadPlants() {
-    const plantList = document.getElementById("plantList");
-
-    if (!plantList) {
-        console.error("Plant list element not found.");
-        return;
+function showResultState(state) {
+    for (const id of ["emptyState", "loadingState", "noMatchState", "results"]) {
+        $(id).hidden = id !== state;
     }
+    $("resultNote").hidden = state !== "results";
+    document.querySelector(".results-panel").setAttribute("aria-busy", String(state === "loadingState"));
+}
 
-    plantList.innerHTML = '<p class="loading-text">Loading plants...</p>';
+function setBusy(value) {
+    busy = value;
+    for (const id of ["chooseButton", "cameraButton", "removeButton", "organ"]) $(id).disabled = value;
+    $("identifyButton").disabled = value || !selectedPhoto;
+    $("buttonLabel").textContent = value ? "Identifying…" : "Identify this plant";
+}
 
+function resetPhoto() {
+    selectionVersion++;
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = null;
+    selectedPhoto = null;
+    $("preview").removeAttribute("src");
+    $("preview").hidden = true;
+    $("uploadPrompt").hidden = false;
+    $("photoMeta").hidden = true;
+    $("removeButton").hidden = true;
+    $("photoInput").value = "";
+    $("cameraInput").value = "";
+    $("statusMessage").textContent = "";
+    $("results").replaceChildren();
+    showError();
+    showResultState("emptyState");
+    setBusy(false);
+}
+
+async function preparePhoto(file) {
+    if (!["image/jpeg", "image/png"].includes(file.type)) {
+        throw new Error("Please choose a JPG or PNG photo. Convert HEIC photos to JPG first.");
+    }
+    if (!file.size || file.size > MAX_SOURCE_BYTES) throw new Error("Choose a photo smaller than 20 MB.");
+    const localUrl = URL.createObjectURL(file);
+    const photo = new Image();
     try {
-        const data = await fetchAPI("/plants");
-        displayPlants(data.plants || []);
-    } catch (error) {
-        console.error("Failed to load plants:", error);
-        plantList.innerHTML = "<p>Unable to connect to the API.</p>";
-    }
-}
-
-// SEARCH PLANTS
-async function searchPlants() {
-    const searchInput = document.getElementById("searchInput");
-    const plantList = document.getElementById("plantList");
-
-    if (!searchInput || !plantList) {
-        console.error("Search or plant list element not found.");
-        return;
-    }
-
-    const query = searchInput.value.trim();
-
-    // Empty search = show everything
-    if (!query) {
-        loadPlants();
-        return;
-    }
-
-    plantList.innerHTML = '<p class="loading-text">Searching...</p>';
-
-    try {
-        const data = await fetchAPI(
-            `/plants/search?q=${encodeURIComponent(query)}`
-        );
-
-        displayPlants(data.results || []);
-    } catch (error) {
-        console.error("Search failed:", error);
-        plantList.innerHTML = "<p>Search failed. Please try again.</p>";
-    }
-}
-
-// DISPLAY PLANTS
-function slugify(text) {
-    return text
-        .toLowerCase()
-        .trim()
-        .replace(/\s+/g, "-");
-}
-
-function displayPlants(plants) {
-    const plantList = document.getElementById("plantList");
-
-    if (!plantList) {
-        console.error("Plant list element not found.");
-        return;
-    }
-
-    plantList.innerHTML = "";
-
-    if (!plants || plants.length === 0) {
-        plantList.innerHTML = "<p>No plants found.</p>";
-        return;
-    }
-
-    plants.forEach(plant => {
-        const card = document.createElement("div");
-        card.className = "plant-card";
-
-        card.innerHTML = `
-            <div class="plant-image">
-                <img
-                    src="images/${slugify(plant.common_name)}.jpg"
-                    alt="${plant.common_name}"
-                    onerror="this.onerror=null;this.src='images/placeholder.jpg';"
-                >
-            </div>
-
-            <div class="plant-card-body">
-                <h3>${plant.common_name}</h3>
-
-                <p class="plant-scientific">
-                    ${plant.scientific_name}
-                </p>
-
-                <p class="plant-family">
-                    ${plant.family}
-                </p>
-
-                <p class="plant-description">
-                    ${plant.description}
-                </p>
-
-                <button onclick="viewPlant(${plant.id})">
-                    View Details
-                </button>
-            </div>
-        `;
-
-        plantList.appendChild(card);
-    });
-}
-
-// GET ONE PLANT
-async function viewPlant(id) {
-    try {
-        const plant = await fetchAPI(`/plants/${id}`);
-
-        const modalImage = document.getElementById("modalImage");
-        const modalContent = document.getElementById("modalContent");
-
-        if (!modalImage || !modalContent) {
-            console.error("Modal elements not found in the page.");
-            return;
+        photo.src = localUrl;
+        await photo.decode();
+        if (photo.naturalWidth * photo.naturalHeight > MAX_SOURCE_PIXELS) {
+            throw new Error("This photo has very large dimensions. Resize it to 25 megapixels or less.");
         }
+        const scale = Math.min(1, 2048 / Math.max(photo.naturalWidth, photo.naturalHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(photo.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(photo.naturalHeight * scale));
+        const context = canvas.getContext("2d");
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(photo, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+        if (!blob || blob.size > MAX_UPLOAD_BYTES) throw new Error("This photo is still too large. Try a smaller photo.");
+        return blob;
+    } finally {
+        URL.revokeObjectURL(localUrl);
+    }
+}
 
-        modalImage.src = `images/${slugify(plant.common_name)}.jpg`;
-
-        modalImage.onerror = function () {
-            this.onerror = null;
-            this.src = "images/placeholder.jpg";
-        };
-
-        modalImage.alt = plant.common_name;
-
-        modalContent.innerHTML = `
-            <h2>${plant.common_name}</h2>
-
-            <p class="modal-scientific">
-                ${plant.scientific_name}
-            </p>
-
-            <div class="modal-row">
-                <span>Family</span>
-                <span>${plant.family}</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Genus</span>
-                <span>${plant.genus}</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Plant Type</span>
-                <span>${plant.plant_type}</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Origin</span>
-                <span>${plant.origin}</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Habitat</span>
-                <span>${plant.habitat}</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Lifespan</span>
-                <span>${plant.lifespan}</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Height</span>
-                <span>${plant.height_m} m</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Spread</span>
-                <span>${plant.spread_m} m</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Sunlight</span>
-                <span>${plant.sunlight}</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Water</span>
-                <span>${plant.water_requirement}</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Soil Type</span>
-                <span>${plant.soil_type}</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Flower Color</span>
-                <span>${plant.flower_color}</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Flowering Season</span>
-                <span>${plant.flowering_season}</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Uses</span>
-                <span>${plant.uses}</span>
-            </div>
-
-            <div class="modal-row">
-                <span>Toxicity</span>
-                <span>${plant.toxicity}</span>
-            </div>
-
-            <p class="modal-description">
-                ${plant.description}
-            </p>
-        `;
-
-        openModal();
+async function selectPhoto(file) {
+    if (!file || busy) return;
+    resetPhoto();
+    const version = selectionVersion;
+    $("statusMessage").textContent = "Preparing your photo…";
+    try {
+        const prepared = await preparePhoto(file);
+        if (version !== selectionVersion) return;
+        selectedPhoto = prepared;
+        previewUrl = URL.createObjectURL(prepared);
+        $("preview").src = previewUrl;
+        $("preview").hidden = false;
+        $("uploadPrompt").hidden = true;
+        $("photoMeta").textContent = `${file.name} · ${(prepared.size / 1000).toFixed(0)} KB ready to upload`;
+        $("photoMeta").hidden = false;
+        $("removeButton").hidden = false;
+        $("statusMessage").textContent = "Photo ready. Choose a plant part or let us detect it.";
+        setBusy(false);
     } catch (error) {
-        console.error("Failed to retrieve plant:", error);
-        alert("Unable to retrieve plant.");
+        if (version !== selectionVersion) return;
+        $("statusMessage").textContent = "";
+        showError(error.name === "EncodingError" ? "This photo could not be opened. Try another JPG or PNG." : error.message);
     }
 }
 
-// MODAL
-function openModal() {
-    const modal = document.getElementById("plantModal");
-
-    if (modal) {
-        modal.classList.add("open");
-    }
+async function getConfig(signal) {
+    if (apiConfig) return apiConfig;
+    const response = await fetch("/config", { signal, cache: "no-store" });
+    if (!response.ok) throw new Error("The site configuration could not be loaded. Please refresh and try again.");
+    apiConfig = await response.json();
+    return apiConfig;
 }
 
-function closeModal() {
-    const modal = document.getElementById("plantModal");
-
-    if (modal) {
-        modal.classList.remove("open");
-    }
+function element(tag, className, text) {
+    const node = document.createElement(tag);
+    node.className = className;
+    node.textContent = text;
+    return node;
 }
 
-// CLOSE MODAL WHEN CLICKING OVERLAY
-const plantModalEl = document.getElementById("plantModal");
-
-if (plantModalEl) {
-    plantModalEl.addEventListener("click", function (event) {
-        if (event.target === this) {
-            closeModal();
-        }
+function displayResults(matches) {
+    $("results").replaceChildren();
+    if (!matches.length) {
+        showResultState("noMatchState");
+        return;
+    }
+    matches.forEach((plant, index) => {
+        const percent = Math.min(100, Math.max(0, plant.score * 100));
+        const card = element("article", "match-card", "");
+        const topline = element("div", "match-topline", "");
+        topline.append(element("span", "", index === 0 ? "Closest match" : `Possible match ${index + 1}`), element("span", "", `${percent.toFixed(1)}% match score`));
+        const name = plant.common_names[0] || plant.scientific_name;
+        card.append(topline, element("h4", "", name), element("p", "scientific-name", plant.scientific_name));
+        const meta = element("div", "match-meta", "");
+        meta.append(element("span", "", `Family: ${plant.family || "Not provided"}`), element("span", "", `Genus: ${plant.genus || "Not provided"}`));
+        const track = element("div", "score-track", "");
+        track.setAttribute("aria-hidden", "true");
+        const fill = element("div", "score-fill", "");
+        fill.style.width = `${percent}%`;
+        track.append(fill);
+        card.append(meta, track);
+        $("results").append(card);
     });
+    showResultState("results");
 }
 
-// CLOSE MODAL WITH ESCAPE
-document.addEventListener("keydown", function (event) {
-    if (event.key === "Escape") {
-        closeModal();
+$("identifyForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!selectedPhoto || busy) return;
+    showError();
+    setBusy(true);
+    showResultState("loadingState");
+    $("statusMessage").textContent = "Your photo is being identified…";
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45000);
+    try {
+        const config = await getConfig(controller.signal);
+        const body = new FormData();
+        body.append("image", selectedPhoto, "plant.jpg");
+        body.append("organ", $("organ").value);
+        const response = await fetch(`${config.api_url.replace(/\/$/, "")}/identify`, {
+            method: "POST", headers: { "x-api-key": config.api_key }, body, signal: controller.signal
+        });
+        let data;
+        try { data = await response.json(); } catch { throw new Error("The server returned an unexpected response. Please try again."); }
+        if (!response.ok) {
+            throw new Error(typeof data.detail === "string" ? data.detail : "The photo could not be submitted. Check your image and try again.");
+        }
+        displayResults(data.results);
+        $("statusMessage").textContent = data.count ? `Found ${data.count} possible ${data.count === 1 ? "match" : "matches"}.` : "No match found. Try a clearer photo.";
+    } catch (error) {
+        showResultState("emptyState");
+        $("statusMessage").textContent = "";
+        showError(error.name === "AbortError" ? "This request took too long. Please try again." : error instanceof TypeError ? "Could not connect. Check your connection and try again." : error.message);
+    } finally {
+        clearTimeout(timer);
+        setBusy(false);
     }
 });
 
-// SEARCH WITH ENTER
-const searchInputEl = document.getElementById("searchInput");
-
-if (searchInputEl) {
-    searchInputEl.addEventListener("keydown", function (event) {
-        if (event.key === "Enter") {
-            searchPlants();
-        }
-    });
-}
-
-// START APPLICATION
-loadPlants();
+$("chooseButton").addEventListener("click", () => $("photoInput").click());
+$("cameraButton").addEventListener("click", () => $("cameraInput").click());
+for (const id of ["photoInput", "cameraInput"]) $(id).addEventListener("change", (event) => selectPhoto(event.target.files[0]));
+$("removeButton").addEventListener("click", resetPhoto);
+for (const name of ["dragenter", "dragover"]) $("dropZone").addEventListener(name, (event) => {
+    event.preventDefault();
+    if (!busy) $("dropZone").classList.add("drag-over");
+});
+for (const name of ["dragleave", "drop"]) $("dropZone").addEventListener(name, (event) => {
+    event.preventDefault();
+    $("dropZone").classList.remove("drag-over");
+});
+$("dropZone").addEventListener("drop", (event) => {
+    if (busy) return;
+    if (event.dataTransfer.files.length !== 1) {
+        showError("Please choose one photo of one plant at a time.");
+        return;
+    }
+    selectPhoto(event.dataTransfer.files[0]);
+});
