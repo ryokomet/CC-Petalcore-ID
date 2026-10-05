@@ -1,6 +1,6 @@
 # Petalcore ID
 
-A photo-identification tool for plants. Find out what a plant might tbe from a photo using Pl@ntNet.
+A photo-identification tool for plants. Find out what a plant might be from a photo using Pl@ntNet.
 
 ## How it works
 
